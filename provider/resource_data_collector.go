@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -49,13 +50,13 @@ func providerConfigure(ctx context.Context, d *schema.ResourceData) (interface{}
 	credentials := d.Get("google_credentials").(string)
 	config, err := google.JWTConfigFromJSON([]byte(credentials), "https://www.googleapis.com/auth/cloud-platform")
 	if err != nil {
-		return nil, diag.FromErr(err)
+		return nil, diag.Errorf("failed to operate on data collector: %v", err)
 	}
 
 	client := config.Client(ctx)
 	token, err := config.TokenSource(ctx).Token()
 	if err != nil {
-		return nil, diag.FromErr(err)
+		return nil, diag.Errorf("failed to operate on data collector: %v", err)
 	}
 
 	dcNamesInterface := d.Get("dc_names")
@@ -97,8 +98,10 @@ func createResourceDataCollector() *schema.Resource {
 		CreateContext: resourceDataCollectorCreateWrapper,
 		ReadContext:   resourceDataCollectorReadFunc,
 		UpdateContext: resourceDataCollectorUpdateFunc,
-		DeleteContext: resourceDataCollectorDeleteFunc,
-
+		DeleteContext: resourceDataCollectorDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: resourceDataCollectorImport,
+		},
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Type:     schema.TypeString,
@@ -117,38 +120,19 @@ func createResourceDataCollector() *schema.Resource {
 }
 
 func resourceDataCollectorCreateWrapper(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	diags := resourceDataCollectorCreateFunc(ctx, d, m)
-	if diags.HasError() {
-		return diag.Errorf("failed to create resource: %v", diags)
-	}
-	return nil
+	config := m.(map[string]interface{})
+	client := config["client"].(*http.Client)
+	token := config["token"].(string)
+
+	return resourceDataCollectorCreateFunc(ctx, d, client, token)
 }
 
-func getGoogleAccessToken(ctx context.Context) (string, error) {
-	creds, err := google.FindDefaultCredentials(ctx)
-	if err != nil {
-		return "", err
-	}
-	tokenSource := creds.TokenSource
-	token, err := tokenSource.Token()
-	if err != nil {
-		return "", err
-	}
-	return token.AccessToken, nil
-}
-
-func resourceDataCollectorCreateFunc(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func resourceDataCollectorCreateFunc(ctx context.Context, d *schema.ResourceData, client *http.Client, token string) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	name := d.Get("name").(string)
 	description := d.Get("description").(string)
 	dataType := d.Get("type").(string)
-
-	client := m.(*http.Client)
-	accessToken, err := getGoogleAccessToken(ctx)
-	if err != nil {
-		return diag.FromErr(err)
-	}
 
 	payload := map[string]string{
 		"name":        name,
@@ -157,19 +141,19 @@ func resourceDataCollectorCreateFunc(ctx context.Context, d *schema.ResourceData
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 
 	req, err := http.NewRequest("POST", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors", "ORG"), bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -182,25 +166,29 @@ func resourceDataCollectorCreateFunc(ctx context.Context, d *schema.ResourceData
 }
 
 func resourceDataCollectorReadFunc(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+	config := m.(map[string]interface{})
+	client := config["client"].(*http.Client)
+	token := config["token"].(string)
+	org := config["org"].(string)
+
+	return resourceDataCollectorRead(ctx, d, client, token, org)
+}
+
+func resourceDataCollectorRead(ctx context.Context, d *schema.ResourceData, client *http.Client, token string, org string) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	client := m.(*http.Client)
 	name := d.Id()
-	accessToken, err := getGoogleAccessToken(ctx)
-	if err != nil {
-		return diag.FromErr(err)
-	}
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "ORG", name), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", org, name), nil)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -214,34 +202,36 @@ func resourceDataCollectorReadFunc(ctx context.Context, d *schema.ResourceData, 
 
 	var data map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 
 	if err := d.Set("name", data["name"]); err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	if err := d.Set("description", data["description"]); err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	if err := d.Set("type", data["type"]); err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 
 	return diags
 }
 
 func resourceDataCollectorUpdateFunc(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+	config := m.(map[string]interface{})
+	client := config["client"].(*http.Client)
+	token := config["token"].(string)
+
+	return resourceDataCollectorUpdate(ctx, d, client, token)
+}
+
+func resourceDataCollectorUpdate(ctx context.Context, d *schema.ResourceData, client *http.Client, token string) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	name := d.Get("name").(string)
 	description := d.Get("description").(string)
 	dataType := d.Get("type").(string)
-
-	client := m.(*http.Client)
-	accessToken, err := getGoogleAccessToken(ctx)
-	if err != nil {
-		return diag.FromErr(err)
-	}
 
 	payload := map[string]string{
 		"description": description,
@@ -249,19 +239,19 @@ func resourceDataCollectorUpdateFunc(ctx context.Context, d *schema.ResourceData
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 
-	req, err := http.NewRequest("PUT", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "ORG", name), bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "ORG", name), bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -272,26 +262,29 @@ func resourceDataCollectorUpdateFunc(ctx context.Context, d *schema.ResourceData
 	return diags
 }
 
-func resourceDataCollectorDeleteFunc(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func resourceDataCollectorDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+	config := m.(map[string]interface{})
+	client := config["client"].(*http.Client)
+	token := config["token"].(string)
+
+	return resourceDataCollectorDeleteFunc(ctx, d, client, token)
+}
+
+func resourceDataCollectorDeleteFunc(ctx context.Context, d *schema.ResourceData, client *http.Client, token string) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	client := m.(*http.Client)
 	name := d.Id()
-	accessToken, err := getGoogleAccessToken(ctx)
-	if err != nil {
-		return diag.FromErr(err)
-	}
 
-	req, err := http.NewRequest("DELETE", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "ORG", name), nil)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "ORG", name), nil)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return diag.FromErr(err)
+		return diag.Errorf("failed to operate on data collector: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -301,4 +294,75 @@ func resourceDataCollectorDeleteFunc(ctx context.Context, d *schema.ResourceData
 
 	d.SetId("")
 	return diags
+}
+
+func resourceDataCollectorImport(ctx context.Context, d *schema.ResourceData, m interface{}) ([]*schema.ResourceData, error) {
+	config := m.(map[string]interface{})
+	client := config["client"].(*http.Client)
+	token := config["token"].(string)
+	org := config["org"].(string)
+
+	resources, diags := resourceDataCollectorImportFunc(ctx, d, map[string]interface{}{"client": client, "token": token, "org": org})
+	if diags != nil {
+		return resources, fmt.Errorf("failed to import data collector: %v", diags)
+	}
+	return resources, nil
+}
+
+func resourceDataCollectorImportFunc(ctx context.Context, d *schema.ResourceData, m interface{}) ([]*schema.ResourceData, diag.Diagnostics) {
+	config := m.(map[string]interface{})
+	client := config["client"].(*http.Client)
+	token := config["token"].(string)
+	org := config["org"].(string)
+
+	id := d.Id()
+	parts := strings.Split(id, "/")
+	if len(parts) != 2 {
+		return nil, diag.Errorf("unexpected format of ID (%s), expected project_id/name", id)
+	}
+
+	projectID := parts[0]
+	name := parts[1]
+
+	d.Set("project_id", projectID)
+	d.Set("name", name)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", org, name), nil)
+	if err != nil {
+		return nil, diag.Errorf("failed to operate on data collector: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, diag.Errorf("failed to operate on data collector: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound {
+			d.SetId("")
+			return []*schema.ResourceData{d}, nil
+		}
+		return nil, diag.Errorf("failed to read data collector: %s", resp.Status)
+	}
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, diag.Errorf("failed to import data collector: %v", err)
+	}
+
+	if err := d.Set("name", data["name"]); err != nil {
+		return nil, diag.Errorf("failed to import data collector: %v", err)
+	}
+	if err := d.Set("description", data["description"]); err != nil {
+		return nil, diag.Errorf("failed to import data collector: %v", err)
+	}
+	if err := d.Set("type", data["type"]); err != nil {
+		return nil, diag.Errorf("failed to import data collector: %v", err)
+	}
+
+	return []*schema.ResourceData{d}, nil
 }
