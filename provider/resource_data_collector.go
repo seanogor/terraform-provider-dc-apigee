@@ -297,10 +297,25 @@ func resourceDataCollectorDeleteFunc(ctx context.Context, d *schema.ResourceData
 }
 
 func resourceDataCollectorImport(ctx context.Context, d *schema.ResourceData, m interface{}) ([]*schema.ResourceData, error) {
-	config := m.(map[string]interface{})
-	client := config["client"].(*http.Client)
-	token := config["token"].(string)
-	org := config["org"].(string)
+	config, ok := m.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("failed to cast config to map[string]interface{}")
+	}
+
+	client, ok := config["client"].(*http.Client)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("client is not set or is not of type *http.Client")
+	}
+
+	token, ok := config["token"].(string)
+	if !ok || token == "" {
+		return nil, fmt.Errorf("token is not set or is not of type string")
+	}
+
+	org, ok := config["org"].(string)
+	if !ok || org == "" {
+		return nil, fmt.Errorf("org is not set or is not of type string")
+	}
 
 	resources, diags := resourceDataCollectorImportFunc(ctx, d, map[string]interface{}{"client": client, "token": token, "org": org})
 	if diags != nil {
@@ -310,10 +325,25 @@ func resourceDataCollectorImport(ctx context.Context, d *schema.ResourceData, m 
 }
 
 func resourceDataCollectorImportFunc(ctx context.Context, d *schema.ResourceData, m interface{}) ([]*schema.ResourceData, diag.Diagnostics) {
-	config := m.(map[string]interface{})
-	client := config["client"].(*http.Client)
-	token := config["token"].(string)
-	org := config["org"].(string)
+	config, ok := m.(map[string]interface{})
+	if !ok {
+		return nil, diag.Errorf("failed to cast config to map[string]interface{}")
+	}
+
+	client, ok := config["client"].(*http.Client)
+	if !ok || client == nil {
+		return nil, diag.Errorf("client is not set or is not of type *http.Client")
+	}
+
+	token, ok := config["token"].(string)
+	if !ok || token == "" {
+		return nil, diag.Errorf("token is not set or is not of type string")
+	}
+
+	org, ok := config["org"].(string)
+	if !ok || org == "" {
+		return nil, diag.Errorf("org is not set or is not of type string")
+	}
 
 	id := d.Id()
 	parts := strings.Split(id, "/")
@@ -324,12 +354,16 @@ func resourceDataCollectorImportFunc(ctx context.Context, d *schema.ResourceData
 	projectID := parts[0]
 	name := parts[1]
 
-	d.Set("project_id", projectID)
-	d.Set("name", name)
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, diag.Errorf("failed to set project_id: %v", err)
+	}
+	if err := d.Set("name", name); err != nil {
+		return nil, diag.Errorf("failed to set name: %v", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", org, name), nil)
 	if err != nil {
-		return nil, diag.Errorf("failed to operate on data collector: %v", err)
+		return nil, diag.Errorf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -337,7 +371,7 @@ func resourceDataCollectorImportFunc(ctx context.Context, d *schema.ResourceData
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, diag.Errorf("failed to operate on data collector: %v", err)
+		return nil, diag.Errorf("failed to perform request: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -351,17 +385,17 @@ func resourceDataCollectorImportFunc(ctx context.Context, d *schema.ResourceData
 
 	var data map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, diag.Errorf("failed to import data collector: %v", err)
+		return nil, diag.Errorf("failed to decode response body: %v", err)
 	}
 
 	if err := d.Set("name", data["name"]); err != nil {
-		return nil, diag.Errorf("failed to import data collector: %v", err)
+		return nil, diag.Errorf("failed to set name: %v", err)
 	}
 	if err := d.Set("description", data["description"]); err != nil {
-		return nil, diag.Errorf("failed to import data collector: %v", err)
+		return nil, diag.Errorf("failed to set description: %v", err)
 	}
 	if err := d.Set("type", data["type"]); err != nil {
-		return nil, diag.Errorf("failed to import data collector: %v", err)
+		return nil, diag.Errorf("failed to set type: %v", err)
 	}
 
 	return []*schema.ResourceData{d}, nil
