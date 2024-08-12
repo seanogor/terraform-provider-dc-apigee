@@ -14,31 +14,72 @@ import (
 
 // Provider returns a schema.Provider for the Terraform provider
 func Provider() *schema.Provider {
-	return &schema.Provider{
-		Schema: map[string]*schema.Schema{
-			"dc_name": {
-				Type:     schema.TypeString,
-				Required: true,
-			},
-		},
-		ResourcesMap: map[string]*schema.Resource{
-			"dc_collector": createResourceDataCollector(),
-		},
-		ConfigureContextFunc: providerConfigure,
-	}
+    return &schema.Provider{
+        Schema: map[string]*schema.Schema{
+            "dc_name": {
+                Type:        schema.TypeString,
+                Required:    true,
+                DefaultFunc: schema.EnvDefaultFunc("DC_NAME", nil),
+                Description: "The data collector name",
+            },
+            "org_name": {
+                Type:        schema.TypeString,
+                Required:    true,
+                DefaultFunc: schema.EnvDefaultFunc("ORG_NAME", nil),
+                Description: "The organization name",
+            },
+            "access_token": {
+                Type:        schema.TypeString,
+                Required:    true,
+                DefaultFunc: schema.EnvDefaultFunc("ACCESS_TOKEN", nil),
+                Description: "The access token for authentication",
+            },
+        },
+        ResourcesMap: map[string]*schema.Resource{
+            "dc_collector": createResourceDataCollector(),
+        },
+        ConfigureContextFunc: providerConfigure,
+    }
 }
+
 func providerConfigure(ctx context.Context, d *schema.ResourceData) (interface{}, diag.Diagnostics) {
-	var diags diag.Diagnostics
+    var diags diag.Diagnostics
 
-	// Example configuration logic
-	config := map[string]interface{}{
-		"org_name":     d.Get("org_name").(string),
-		"access_token": d.Get("access_token").(string),
-	}
+    dcNameInterface := d.Get("dc_name")
+    if dcNameInterface == nil {
+        return nil, diag.Errorf("data collector name (dc_name) is not set")
+    }
+    dcName, ok := dcNameInterface.(string)
+    if !ok {
+        return nil, diag.Errorf("data collector name (dc_name) is not a string")
+    }
 
-	return config, diags
+    orgNameInterface := d.Get("org_name")
+    if orgNameInterface == nil {
+        return nil, diag.Errorf("organization name (org_name) is not set")
+    }
+    orgName, ok := orgNameInterface.(string)
+    if !ok {
+        return nil, diag.Errorf("organization name (org_name) is not a string")
+    }
+
+    accessTokenInterface := d.Get("access_token")
+    if accessTokenInterface == nil {
+        return nil, diag.Errorf("access token (access_token) is not set")
+    }
+    accessToken, ok := accessTokenInterface.(string)
+    if !ok {
+        return nil, diag.Errorf("access token (access_token) is not a string")
+    }
+
+    config := map[string]interface{}{
+        "dc_name":      dcName,
+        "org_name":     orgName,
+        "access_token": accessToken,
+    }
+
+    return config, diags
 }
-
 func createResourceDataCollector() *schema.Resource {
 	return &schema.Resource{
 		CreateContext: resourceDataCollectorCreateWrapper,
