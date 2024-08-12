@@ -14,72 +14,92 @@ import (
 
 // Provider returns a schema.Provider for the Terraform provider
 func Provider() *schema.Provider {
-    return &schema.Provider{
-        Schema: map[string]*schema.Schema{
-            "dc_name": {
-                Type:        schema.TypeString,
-                Required:    true,
-                DefaultFunc: schema.EnvDefaultFunc("DC_NAME", nil),
-                Description: "The data collector name",
-            },
-            "org_name": {
-                Type:        schema.TypeString,
-                Required:    true,
-                DefaultFunc: schema.EnvDefaultFunc("ORG_NAME", nil),
-                Description: "The organization name",
-            },
-            "access_token": {
-                Type:        schema.TypeString,
-                Required:    true,
-                DefaultFunc: schema.EnvDefaultFunc("ACCESS_TOKEN", nil),
-                Description: "The access token for authentication",
-            },
-        },
-        ResourcesMap: map[string]*schema.Resource{
-            "dc_collector": createResourceDataCollector(),
-        },
-        ConfigureContextFunc: providerConfigure,
-    }
+	return &schema.Provider{
+		Schema: map[string]*schema.Schema{
+			"dc_names": {
+				Type:        schema.TypeList,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Required:    true,
+				DefaultFunc: schema.EnvDefaultFunc("DC_NAMES", nil),
+				Description: "The data collector names",
+			},
+			"org_name": {
+				Type:        schema.TypeString,
+				Required:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ORG_NAME", nil),
+				Description: "The organization name",
+			},
+			"google_credentials": {
+				Type:        schema.TypeString,
+				Required:    true,
+				DefaultFunc: schema.EnvDefaultFunc("GOOGLE_CREDENTIALS", nil),
+				Description: "The Google credentials JSON",
+			},
+		},
+		ResourcesMap: map[string]*schema.Resource{
+			"dc_collector": createResourceDataCollector(),
+		},
+		ConfigureContextFunc: providerConfigure,
+	}
 }
 
 func providerConfigure(ctx context.Context, d *schema.ResourceData) (interface{}, diag.Diagnostics) {
-    var diags diag.Diagnostics
+	var diags diag.Diagnostics
 
-    dcNameInterface := d.Get("dc_name")
-    if dcNameInterface == nil {
-        return nil, diag.Errorf("data collector name (dc_name) is not set")
-    }
-    dcName, ok := dcNameInterface.(string)
-    if !ok {
-        return nil, diag.Errorf("data collector name (dc_name) is not a string")
-    }
+	credentials := d.Get("google_credentials").(string)
+	config, err := google.JWTConfigFromJSON([]byte(credentials), "https://www.googleapis.com/auth/cloud-platform")
+	if err != nil {
+		return nil, diag.FromErr(err)
+	}
 
-    orgNameInterface := d.Get("org_name")
-    if orgNameInterface == nil {
-        return nil, diag.Errorf("organization name (org_name) is not set")
-    }
-    orgName, ok := orgNameInterface.(string)
-    if !ok {
-        return nil, diag.Errorf("organization name (org_name) is not a string")
-    }
+	client := config.Client(ctx)
+	token, err := config.TokenSource(ctx).Token()
+	if err != nil {
+		return nil, diag.FromErr(err)
+	}
 
-    accessTokenInterface := d.Get("access_token")
-    if accessTokenInterface == nil {
-        return nil, diag.Errorf("access token (access_token) is not set")
-    }
-    accessToken, ok := accessTokenInterface.(string)
-    if !ok {
-        return nil, diag.Errorf("access token (access_token) is not a string")
-    }
+	dcNamesInterface := d.Get("dc_names")
+	if dcNamesInterface == nil {
+		return nil, diag.Errorf("data collector names (dc_names) are not set")
+	}
+	dcNames, ok := dcNamesInterface.([]interface{})
+	if !ok {
+		return nil, diag.Errorf("data collector names (dc_names) are not a list of strings")
+	}
 
-    config := map[string]interface{}{
-        "dc_name":      dcName,
-        "org_name":     orgName,
-        "access_token": accessToken,
-    }
+	orgNameInterface := d.Get("org_name")
+	if orgNameInterface == nil {
+		return nil, diag.Errorf("organization name (org_name) is not set")
+	}
+	orgName, ok := orgNameInterface.(string)
+	if !ok {
+		return nil, diag.Errorf("organization name (org_name) is not a string")
+	}
+	dcNamesInterface = d.Get("dc_names")
+	if dcNamesInterface == nil {
+		return nil, diag.Errorf("data collector names (dc_names) are not set")
+	}
+	dcNames, ok = dcNamesInterface.([]interface{})
+	if !ok {
+		return nil, diag.Errorf("data collector names (dc_names) are not a list of strings")
+	}
 
-    return config, diags
+	dcNamesList := make([]string, len(dcNames))
+	for i, dcName := range dcNames {
+		dcNamesList[i], ok = dcName.(string)
+		if !ok {
+			return nil, diag.Errorf("data collector name (dc_names) at index %d is not a string", i)
+		}
+	}
+
+	return map[string]interface{}{
+		"client":   client,
+		"token":    token.AccessToken,
+		"dc_names": dcNamesList,
+		"org_name": orgName,
+	}, diags
 }
+
 func createResourceDataCollector() *schema.Resource {
 	return &schema.Resource{
 		CreateContext: resourceDataCollectorCreateWrapper,
