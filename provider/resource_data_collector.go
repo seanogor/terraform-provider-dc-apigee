@@ -75,14 +75,6 @@ func providerConfigure(ctx context.Context, d *schema.ResourceData) (interface{}
 	if !ok {
 		return nil, diag.Errorf("organization name (org_name) is not a string")
 	}
-	dcNamesInterface = d.Get("dc_names")
-	if dcNamesInterface == nil {
-		return nil, diag.Errorf("data collector names (dc_names) are not set")
-	}
-	dcNames, ok = dcNamesInterface.([]interface{})
-	if !ok {
-		return nil, diag.Errorf("data collector names (dc_names) are not a list of strings")
-	}
 
 	dcNamesList := make([]string, len(dcNames))
 	for i, dcName := range dcNames {
@@ -123,6 +115,7 @@ func createResourceDataCollector() *schema.Resource {
 		},
 	}
 }
+
 func resourceDataCollectorCreateWrapper(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	diags := resourceDataCollectorCreateFunc(ctx, d, m)
 	if diags.HasError() {
@@ -259,7 +252,7 @@ func resourceDataCollectorUpdateFunc(ctx context.Context, d *schema.ResourceData
 		return diag.FromErr(err)
 	}
 
-	req, err := http.NewRequest("PUT", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "kyc-apigee-nprd", name), bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequest("PUT", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "ORG", name), bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return diag.FromErr(err)
 	}
@@ -289,7 +282,7 @@ func resourceDataCollectorDeleteFunc(ctx context.Context, d *schema.ResourceData
 		return diag.FromErr(err)
 	}
 
-	req, err := http.NewRequest("DELETE", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "kyc-apigee-nprd", name), nil)
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("https://apigee.googleapis.com/v1/organizations/%s/datacollectors/%s", "ORG", name), nil)
 	if err != nil {
 		return diag.FromErr(err)
 	}
