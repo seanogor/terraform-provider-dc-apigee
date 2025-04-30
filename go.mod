@@ -1,4 +1,4 @@
-module github.com/moodys-ma-external/kyc-apigee/tf-provider/dc-apigee
+module github.com/seanogor/tf-provider/dc-apigee
 
 go 1.22.6
 
