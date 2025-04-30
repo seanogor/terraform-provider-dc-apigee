@@ -4,7 +4,6 @@ go 1.22.6
 
 require (
 	github.com/hashicorp/terraform-plugin-sdk v1.17.2
-	github.com/moodys-ma-external/kyc-apigee/tf-provider/dc-apigee/provider v0.0.0
 )
 
 require (
